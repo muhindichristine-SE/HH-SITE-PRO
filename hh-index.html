@@ -385,7 +385,7 @@
 <!-- HOME -->
 <div class="screen active" id="screenHome">
   <div style="padding-top:8px;">
-    <button id="installAppBtn" onclick="promptInstall()" style="display:none;margin:0 0 14px;background:var(--hh-purple-light);color:var(--hh-purple);border:1px dashed var(--hh-purple);border-radius:10px;padding:10px 16px;font-size:13px;font-weight:600;cursor:pointer;">⬇ Install App to Home Screen</button>
+    <button id="installAppBtn" onclick="promptInstall()" style="margin:0 0 14px;background:var(--hh-purple-light);color:var(--hh-purple);border:1px dashed var(--hh-purple);border-radius:10px;padding:10px 16px;font-size:13px;font-weight:600;cursor:pointer;">⬇ Install App to Home Screen</button>
     <div id="homeTabProjects">
       <div class="home-stats">
         <div class="home-stat"><div class="home-stat-num" id="homeProjectCount">0</div><div class="home-stat-label">Projects</div></div>
@@ -1945,7 +1945,7 @@ window.addEventListener('appinstalled', () => {
   _deferredInstallPrompt = null;
 });
 async function promptInstall() {
-  if (!_deferredInstallPrompt) { toast('App already installed or install not available'); return; }
+  if (!_deferredInstallPrompt) { toast('Install from your browser menu: ⋮ > Install app / Add to Home screen', 5000); return; }
   _deferredInstallPrompt.prompt();
   await _deferredInstallPrompt.userChoice;
   _deferredInstallPrompt = null;

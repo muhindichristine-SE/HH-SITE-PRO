@@ -579,14 +579,14 @@
 <div class="screen" id="screenAnnotate">
   <button class="back-btn" onclick="showScreen('screenProject')">← Back to Issues</button>
   <p class="page-title">Annotate Photo</p>
-  <p style="font-size:13px;color:var(--hh-gray);margin-bottom:12px;">Draw on the image, then tap <strong>Save Annotations</strong> below</p>
+  <p style="font-size:13px;color:var(--hh-gray);margin-bottom:12px;">Draw on the image, then tap <strong>Save Annotations</strong> below. Tap <strong>🧹 Eraser</strong> to rub out part of a drawing, or hold it down to clear everything.</p>
   <div class="ann-tools">
     <button class="tool-btn active" id="tArrow" onclick="setTool('arrow', this)">→ Arrow</button>
     <button class="tool-btn" id="tCircle" onclick="setTool('circle', this)">○ Circle</button>
     <button class="tool-btn" id="tRect" onclick="setTool('rect', this)">□ Box</button>
     <button class="tool-btn" id="tPen" onclick="setTool('pen', this)">✏ Pen</button>
     <button class="tool-btn" onclick="undoAnn()">↩ Undo</button>
-    <button class="tool-btn" onclick="clearAnn()">Clear</button>
+    <button class="tool-btn" id="tEraser" onclick="setTool('eraser', this)" onpointerdown="startEraserHold()" onpointerup="cancelEraserHold()" onpointerleave="cancelEraserHold()" onpointercancel="cancelEraserHold()">🧹 Eraser</button>
     <button class="tool-btn ann-width-btn active" id="wThin" onclick="setAnnWidth(3, this)">—</button>
     <button class="tool-btn ann-width-btn" id="wThick" onclick="setAnnWidth(7, this)">▬</button>
     <div style="display:flex;gap:5px;align-items:center;margin-left:auto;">
@@ -1403,13 +1403,35 @@ function annMove(e) {
   else if (S.annTool==='circle') { const rx=(p.x-S.sx)/2,ry=(p.y-S.sy)/2; annCtx.beginPath(); annCtx.ellipse(S.sx+rx,S.sy+ry,Math.abs(rx),Math.abs(ry),0,0,Math.PI*2); annCtx.stroke(); }
   else if (S.annTool==='rect') { annCtx.beginPath(); annCtx.strokeRect(S.sx,S.sy,p.x-S.sx,p.y-S.sy); }
   else if (S.annTool==='arrow') { drawArrow(S.sx,S.sy,p.x,p.y,lw); }
+  else if (S.annTool==='eraser') {
+    S.penPts.push({x:p.x,y:p.y});
+    annCtx.save();
+    annCtx.globalCompositeOperation = 'destination-out';
+    annCtx.lineWidth = lw*3;
+    annCtx.beginPath();
+    S.penPts.forEach((pt,i)=>i===0?annCtx.moveTo(pt.x,pt.y):annCtx.lineTo(pt.x,pt.y));
+    annCtx.stroke();
+    annCtx.restore();
+  }
 }
 function annEnd() { S.isDrawing=false; S.penPts=[]; }
 function drawArrow(fx,fy,tx,ty,lw) { const hl=18*(lw/3),angle=Math.atan2(ty-fy,tx-fx); annCtx.beginPath(); annCtx.moveTo(fx,fy); annCtx.lineTo(tx,ty); annCtx.stroke(); annCtx.beginPath(); annCtx.moveTo(tx,ty); annCtx.lineTo(tx-hl*Math.cos(angle-Math.PI/6),ty-hl*Math.sin(angle-Math.PI/6)); annCtx.lineTo(tx-hl*Math.cos(angle+Math.PI/6),ty-hl*Math.sin(angle+Math.PI/6)); annCtx.closePath(); annCtx.fill(); }
 function setTool(t,btn) {
   S.annTool=t;
-  ['tArrow','tCircle','tRect','tPen'].forEach(id => { const b = document.getElementById(id); if (b) b.classList.remove('active'); });
+  ['tArrow','tCircle','tRect','tPen','tEraser'].forEach(id => { const b = document.getElementById(id); if (b) b.classList.remove('active'); });
   btn.classList.add('active');
+}
+let _eraserHoldTimer = null;
+let _eraserHoldFired = false;
+function startEraserHold() {
+  _eraserHoldFired = false;
+  _eraserHoldTimer = setTimeout(() => {
+    _eraserHoldFired = true;
+    if (confirm('Clear ALL annotations on this photo? This cannot be undone.')) clearAnn();
+  }, 600);
+}
+function cancelEraserHold() {
+  if (_eraserHoldTimer) { clearTimeout(_eraserHoldTimer); _eraserHoldTimer = null; }
 }
 function setAnnColor(c,el) { S.annColor=c; document.querySelectorAll('.color-dot').forEach(d=>d.classList.remove('active')); el.classList.add('active'); }
 function setAnnWidth(w, btn) {
@@ -2006,19 +2028,34 @@ const HELP_VERSION = 'v1';
 
 const HELP_STEPS = [
   {
+    icon: '🏠',
+    title: 'Your Dashboard',
+    body: 'The home screen shows <strong>Projects</strong> (audits you\'ve started), <strong>Issues</strong> (total logged across all projects) and whether you\'re currently <strong>Online</strong> or <strong>Offline</strong>. The app works fully offline — the dot just tells you your connection status.'
+  },
+  {
     icon: '📋',
-    title: 'Site Pro',
-    body: 'Tap <strong>"Site Pro"</strong> on the home screen to start a project. Fill in the project name and client details — these appear on your exported report.'
+    title: 'Starting a Site Audit',
+    body: 'Tap <strong>"Site Pro"</strong> on the home screen to start a project. Fill in the project name, client, and reference details — these appear automatically on your exported report.'
   },
   {
     icon: '📸',
     title: 'Logging Issues',
-    body: 'Inside a project, tap <strong>"Add Issue"</strong>. Capture a photo from your camera, upload one, or continue without a photo for text-only observations.'
+    body: 'Inside a project, tap <strong>"Add Issue"</strong>. Capture a photo from your camera, upload one, or continue without a photo for text-only observations. GPS location is captured automatically where available.'
+  },
+  {
+    icon: '🔴',
+    title: 'Severity: Critical / Moderate / Minor',
+    body: 'Every issue gets a severity rating: <strong>Critical</strong> (urgent, safety or structural risk — needs immediate attention), <strong>Moderate</strong> (should be fixed but not urgent), and <strong>Minor</strong> (cosmetic or low-priority). This drives how issues are highlighted and summarised in your report.'
+  },
+  {
+    icon: '🚦',
+    title: 'Status: Open / In Progress / Closed',
+    body: 'Track each issue\'s progress with a status: <strong>Open</strong> (not yet actioned), <strong>In Progress</strong> (being worked on), or <strong>Closed</strong> (resolved). Your report\'s summary counts issues by both severity and status.'
   },
   {
     icon: '🖊️',
     title: 'Annotate Photos',
-    body: 'After capturing a photo, open the <strong>Annotation tool</strong> to draw arrows, highlight defects, or add freehand marks directly on the image.'
+    body: 'After capturing a photo, open the <strong>Annotation tool</strong> to draw arrows, circles, boxes or freehand marks on the image. Tap <strong>Eraser</strong> to rub out just part of a drawing, or hold it down to clear everything on that photo.'
   },
   {
     icon: '🎤',
@@ -2028,12 +2065,22 @@ const HELP_STEPS = [
   {
     icon: '📄',
     title: 'Export PDF Report',
-    body: 'When ready, tap <strong>"Export PDF"</strong> in the project Summary tab. The report includes your HH cover page, issue photos, annotations, and a full issue log.'
+    body: 'When ready, tap <strong>"Export PDF"</strong> in the project Summary tab. The report includes your HH cover page, revision record, a summary of issues by severity/status, and full issue pages with photos and annotations. You can preview it on-screen before downloading or sharing.'
+  },
+  {
+    icon: '📲',
+    title: 'Install to Home Screen',
+    body: 'Tap <strong>"Install App to Home Screen"</strong> on the home screen to add HH Site Audit as a standalone app. If the button doesn\'t trigger the install prompt, use your browser\'s menu (⋮) and choose <strong>"Install app"</strong> or <strong>"Add to Home Screen"</strong> instead.'
+  },
+  {
+    icon: '📴',
+    title: 'Works Offline',
+    body: 'All your projects, issues and photos are stored locally on this device — you can keep working with no internet connection at all. Nothing is uploaded to a server.'
   },
   {
     icon: '💾',
     title: 'Backup & Restore',
-    body: 'Use <strong>"Backup Data"</strong> on the home screen to save all projects as a JSON file. Use <strong>"Restore Data"</strong> to reload it — useful when switching devices.'
+    body: 'Use <strong>"Backup Data"</strong> on the home screen to save all projects as a JSON file — do this regularly, since clearing browser data will erase local projects. Use <strong>"Restore Data"</strong> to reload a backup, which is also how you move your data to another device.'
   }
 ];
 
@@ -2080,20 +2127,8 @@ function closeHelp() {
 
 function _mascotInit() {
   var mascot = document.getElementById('mascotWrap');
-  function _updateMascot() {
-    var home = document.getElementById('screenHome');
-    if (home && home.classList.contains('active')) {
-      mascot.style.display = 'block';
-    } else {
-      mascot.style.display = 'none';
-    }
-  }
-  // watch screen class changes
-  var observer = new MutationObserver(_updateMascot);
-  document.querySelectorAll('.screen').forEach(function(el) {
-    observer.observe(el, { attributes: true, attributeFilter: ['class'] });
-  });
-  _updateMascot();
+  // Mascot is visible on every screen now (not just Home)
+  if (mascot) mascot.style.display = 'block';
   // auto-open tour for first-time visitors
   if (!localStorage.getItem('hh_help_seen_' + HELP_VERSION)) {
     setTimeout(openHelp, 800);
@@ -2116,7 +2151,7 @@ document.addEventListener('DOMContentLoaded', _mascotInit);
   position:fixed;
   bottom:0;
   right:0;
-  width:200px;
+  width:100px;
   z-index:500;
   pointer-events:none;
   display:none;

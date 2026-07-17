@@ -1,6 +1,6 @@
 // HH Site Audit — Service Worker (network-first)
-const CACHE = 'hh-site-audit-v1';
-const CORE = ['./', './index.html', './hh-manifest.json', './icon-192.png', './icon-512.png'];
+const CACHE = 'hh-site-audit-v2';
+const CORE = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(CORE)).catch(() => {}));

@@ -794,6 +794,8 @@ function showScreen(id) {
   var el = document.getElementById(id);
   if (el) el.classList.add('active');
   window.scrollTo(0, 0);
+  var mascot = document.getElementById('mascotWrap');
+  if (mascot) mascot.style.display = (id === 'screenHome') ? 'block' : 'none';
 }
 
 // ── BACKUP / RESTORE ──────────────────────────────────────
@@ -2127,8 +2129,9 @@ function closeHelp() {
 
 function _mascotInit() {
   var mascot = document.getElementById('mascotWrap');
-  // Mascot is visible on every screen now (not just Home)
-  if (mascot) mascot.style.display = 'block';
+  // Mascot only shows on the dashboard (Home) screen
+  var homeEl = document.getElementById('screenHome');
+  if (mascot) mascot.style.display = (homeEl && homeEl.classList.contains('active')) ? 'block' : 'none';
   // auto-open tour for first-time visitors
   if (!localStorage.getItem('hh_help_seen_' + HELP_VERSION)) {
     setTimeout(openHelp, 800);
@@ -2139,7 +2142,7 @@ document.addEventListener('DOMContentLoaded', _mascotInit);
 
 </script>
 
-<!-- ═══════ MASCOT (always visible on home screen) ═══════ -->
+<!-- ═══════ MASCOT (dashboard/home screen only) ═══════ -->
 <style>
 @keyframes hhMascotSway { 0%,100% { transform: rotate(0deg); } 50% { transform: rotate(1.2deg); } }
 @keyframes hhBubbleBob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }

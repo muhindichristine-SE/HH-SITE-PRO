@@ -729,6 +729,17 @@ async function _restorePhotosFromIDB() {
         var iss = p.issues[ii];
         if (!iss.photo) iss.photo = await _loadPhoto('iss_' + iss.id) || null;
         if (!iss.annotations) iss.annotations = await _loadPhoto('ann_' + iss.id) || null;
+        if (!iss.extraPhotos || !iss.extraPhotos.length) {
+          var countStr = await _loadPhoto('extcount_' + iss.id);
+          if (countStr) {
+            var count = parseInt(countStr, 10) || 0;
+            iss.extraPhotos = [];
+            for (var ei = 0; ei < count; ei++) {
+              var ep = await _loadPhoto('ext_' + iss.id + '_' + ei);
+              if (ep) iss.extraPhotos.push(ep);
+            }
+          }
+        }
       }
     }
     if (p.days) {
@@ -776,7 +787,7 @@ async function save() {
   try {
     var stripped = S.projects.map(function(proj) {
       var clone = JSON.parse(JSON.stringify(proj));
-      if (clone.issues) clone.issues.forEach(function(iss) { iss.photo = null; iss.annotations = null; });
+      if (clone.issues) clone.issues.forEach(function(iss) { iss.photo = null; iss.annotations = null; iss.extraPhotos = null; });
       return clone;
     });
     localStorage.setItem('hh_site_audit_only', JSON.stringify(stripped));
@@ -792,6 +803,12 @@ async function save() {
           var iss = p.issues[ii];
           if (iss.photo) await _savePhoto('iss_' + iss.id, iss.photo);
           if (iss.annotations) await _savePhoto('ann_' + iss.id, iss.annotations);
+          if (iss.extraPhotos && iss.extraPhotos.length) {
+            for (var ei = 0; ei < iss.extraPhotos.length; ei++) {
+              await _savePhoto('ext_' + iss.id + '_' + ei, iss.extraPhotos[ei]);
+            }
+            await _savePhoto('extcount_' + iss.id, String(iss.extraPhotos.length));
+          }
         }
       }
     }
@@ -1761,7 +1778,7 @@ async function exportPDF() {
   doc.setDrawColor(61,44,141); doc.setLineWidth(0.8); doc.line(M, sy, W-M, sy); sy += 12;
 
   const issues = p.issues;
-  const sev = {Minor:0,Moderate:0,Critical:0};
+  const sev = {Observation:0,Minor:0,Moderate:0,Critical:0};
   const sta = {Open:0,'In Progress':0,Closed:0};
   const asgn = {};
   issues.forEach(iss => {
@@ -1770,13 +1787,13 @@ async function exportPDF() {
     asgn[iss.assigned]=(asgn[iss.assigned]||0)+1;
   });
 
-  const boxW = 50, boxH = 24, boxGap = 8;
-  [[192,57,43],[212,130,10],[39,174,96]].forEach((col,i) => {
+  const boxW = 38, boxH = 24, boxGap = 6;
+  [[192,57,43],[212,130,10],[39,174,96],[107,114,128]].forEach((col,i) => {
     const bx = M + i*(boxW+boxGap);
     doc.setFillColor(...col); doc.roundedRect(bx, sy, boxW, boxH, 2, 2, 'F');
-    doc.setFont('helvetica','bold'); doc.setFontSize(18); doc.setTextColor(255,255,255);
-    doc.text(String([sev.Critical,sev.Moderate,sev.Minor][i]), bx+boxW/2, sy+14, {align:'center'});
-    doc.setFontSize(7); doc.text(['CRITICAL','MODERATE','MINOR'][i], bx+boxW/2, sy+21, {align:'center'});
+    doc.setFont('helvetica','bold'); doc.setFontSize(16); doc.setTextColor(255,255,255);
+    doc.text(String([sev.Critical,sev.Moderate,sev.Minor,sev.Observation][i]), bx+boxW/2, sy+13, {align:'center'});
+    doc.setFontSize(6); doc.text(['CRITICAL','MODERATE','MINOR','OBSERVATION'][i], bx+boxW/2, sy+20, {align:'center'});
   });
   sy += boxH + 14;
 
@@ -1853,33 +1870,61 @@ async function exportPDF() {
 
     const photoY = y;
 
-    // Photo left — large and clear
-    if (iss.annotations || iss.photo) {
-      var _img = iss.annotations || iss.photo;
+    // Collect all photos for this issue
+    var allPhotos = [];
+    if (iss.annotations || iss.photo) allPhotos.push(iss.annotations || iss.photo);
+    if (iss.extraPhotos && iss.extraPhotos.length) {
+      iss.extraPhotos.forEach(function(ep) { allPhotos.push(ep); });
+    }
+
+    // Helper to place a single image
+    function placePhoto(imgData, px, py, pw, ph) {
       var _fmt = 'JPEG';
       try {
-        var _h = ('' + _img).substring(0, 30).toUpperCase();
+        var _h = ('' + imgData).substring(0, 30).toUpperCase();
         if (_h.indexOf('IMAGE/PNG') >= 0) _fmt = 'PNG';
         else if (_h.indexOf('IMAGE/WEBP') >= 0) _fmt = 'WEBP';
       } catch(fe) {}
-      var _placed = false;
-      try {
-        doc.addImage(_img, _fmt, M, photoY, PHOTO_W, PHOTO_H);
-        _placed = true;
-      } catch(e) {
-        // Retry letting jsPDF sniff the format
-        try { doc.addImage(_img, M, photoY, PHOTO_W, PHOTO_H); _placed = true; }
-        catch(e2) { console.log('[PDF] image failed for "'+(iss.title||'')+'":', e2 && e2.message); }
+      try { doc.addImage(imgData, _fmt, px, py, pw, ph); return true; }
+      catch(e) {
+        try { doc.addImage(imgData, px, py, pw, ph); return true; }
+        catch(e2) { return false; }
       }
-      if (!_placed) {
+    }
+
+    if (allPhotos.length === 0) {
+      // No photos at all
+      doc.setFillColor(230,230,230); doc.rect(M, photoY, PHOTO_W, PHOTO_H, 'F');
+      doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(150,150,150);
+      doc.text('No photo', M+PHOTO_W/2, photoY+PHOTO_H/2, {align:'center'});
+    } else if (allPhotos.length === 1) {
+      // Single photo, full size
+      if (!placePhoto(allPhotos[0], M, photoY, PHOTO_W, PHOTO_H)) {
         doc.setFillColor(230,230,230); doc.rect(M, photoY, PHOTO_W, PHOTO_H, 'F');
         doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(150,150,150);
         doc.text('No photo', M+PHOTO_W/2, photoY+PHOTO_H/2, {align:'center'});
       }
     } else {
-      doc.setFillColor(230,230,230); doc.rect(M, photoY, PHOTO_W, PHOTO_H, 'F');
-      doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(150,150,150);
-      doc.text('No photo', M+PHOTO_W/2, photoY+PHOTO_H/2, {align:'center'});
+      // Multiple photos: main photo on top, thumbnails below
+      var mainH = PHOTO_H - 24;
+      if (!placePhoto(allPhotos[0], M, photoY, PHOTO_W, mainH)) {
+        doc.setFillColor(230,230,230); doc.rect(M, photoY, PHOTO_W, mainH, 'F');
+      }
+      // Thumbnail row below main photo
+      var thumbY = photoY + mainH + 2;
+      var thumbCount = Math.min(allPhotos.length - 1, 4); // max 4 thumbnails
+      var thumbW = (PHOTO_W - (thumbCount - 1) * 2) / thumbCount;
+      var thumbH = 20;
+      for (var ti = 0; ti < thumbCount; ti++) {
+        var tx = M + ti * (thumbW + 2);
+        if (!placePhoto(allPhotos[ti + 1], tx, thumbY, thumbW, thumbH)) {
+          doc.setFillColor(220,220,220); doc.rect(tx, thumbY, thumbW, thumbH, 'F');
+        }
+      }
+      if (allPhotos.length > 5) {
+        doc.setFont('helvetica','normal'); doc.setFontSize(7); doc.setTextColor(100,100,100);
+        doc.text('+' + (allPhotos.length - 5) + ' more', M + PHOTO_W, thumbY + thumbH / 2 + 2, {align:'right'});
+      }
     }
 
     // Description right of photo
@@ -1897,7 +1942,7 @@ async function exportPDF() {
     const metaY = photoY + PHOTO_H + 3;
     doc.setDrawColor(200,195,240); doc.setLineWidth(0.3);
     doc.line(M, metaY, W-M, metaY);
-    const sevColor = iss.severity==='Critical'?[192,57,43]:iss.severity==='Moderate'?[212,130,10]:[39,174,96];
+    const sevColor = iss.severity==='Critical'?[192,57,43]:iss.severity==='Moderate'?[212,130,10]:iss.severity==='Observation'?[107,114,128]:[39,174,96];
     doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(...sevColor);
     doc.text(iss.severity, M, metaY + 5);
     doc.setFont('helvetica','normal'); doc.setTextColor(80,80,80);
@@ -1993,12 +2038,12 @@ function sharePDFWithMessage(blob, fileName) {
   const p = S.projects[S.proj];
   const iss = p.issues || [];
   const bStat = { Open: 0, 'In Progress': 0, Closed: 0 };
-  const bSev = { Critical: 0, Moderate: 0, Minor: 0 };
+  const bSev = { Critical: 0, Moderate: 0, Minor: 0, Observation: 0 };
   iss.forEach(i => { bStat[i.status] = (bStat[i.status]||0)+1; bSev[i.severity] = (bSev[i.severity]||0)+1; });
   let msg = `Site Inspection Report — ${p.name}\n\n`;
   msg += `Location: ${p.location||'--'}  |  Client: ${p.client||'--'}\n\n`;
   msg += `Issues found: ${iss.length}\n`;
-  msg += `Critical: ${bSev.Critical}  |  Moderate: ${bSev.Moderate}  |  Minor: ${bSev.Minor}\n`;
+  msg += `Critical: ${bSev.Critical}  |  Moderate: ${bSev.Moderate}  |  Minor: ${bSev.Minor}  |  Observation: ${bSev.Observation}\n`;
   msg += `Open: ${bStat.Open}  |  In Progress: ${bStat['In Progress']}  |  Closed: ${bStat.Closed}\n\n`;
   msg += `Report attached.\n\n— Howard Humphreys Site Audit`;
 
@@ -2141,8 +2186,8 @@ const HELP_STEPS = [
   },
   {
     icon: '🔴',
-    title: 'Severity: Critical / Moderate / Minor',
-    body: 'Every issue gets a severity rating: <strong>Critical</strong> (urgent, safety or structural risk — needs immediate attention), <strong>Moderate</strong> (should be fixed but not urgent), and <strong>Minor</strong> (cosmetic or low-priority). This drives how issues are highlighted and summarised in your report.'
+    title: 'Severity: Critical / Moderate / Minor / Observation',
+    body: 'Every issue gets a severity rating: <strong>Critical</strong> (urgent, safety or structural risk), <strong>Moderate</strong> (should be fixed but not urgent), <strong>Minor</strong> (cosmetic or low-priority), or <strong>Observation</strong> (a note for the record, not necessarily a defect). This drives how issues are highlighted and summarised in your report.'
   },
   {
     icon: '🚦',

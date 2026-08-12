@@ -274,7 +274,7 @@
   .photo-modal button { position: fixed; top: 16px; right: 16px; width: 38px; height: 38px; border: 0; border-radius: 50%; background: white; color: var(--hh-purple); font-size: 20px; font-weight: 700; cursor: pointer; }
   .action-row { display: flex; gap: 8px; margin-bottom: 18px; }
 
-  .summary-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 18px; }
+  .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 18px; }
   .summary-box { background: white; border: 1px solid var(--hh-border); border-radius: var(--radius); padding: 14px 10px; text-align: center; }
   .summary-box-num { font-family: 'Source Serif 4', serif; font-size: 28px; font-weight: 700; color: var(--hh-purple); line-height: 1; margin-bottom: 4px; }
   .summary-box-num.red { color: var(--hh-red); }
@@ -1057,6 +1057,7 @@ function renderIssues() {
         <button class="btn btn-secondary btn-sm" onclick="moveIssue(${i},-1)" title="Move up" ${i===0?'disabled':''}>↑</button>
         <button class="btn btn-secondary btn-sm" onclick="moveIssue(${i},1)" title="Move down" ${i===p.issues.length-1?'disabled':''}>↓</button>
         <button class="btn btn-secondary btn-sm" onclick="openEditIssue(${i})">✎ Edit</button>
+        <button class="btn btn-secondary btn-sm" onclick="addPhotoToIssue(${i})">📷 Add Photo</button>
         ${iss.photo ? `<button class="btn btn-secondary btn-sm" onclick="openAnnotate(${i})">✏ Annotate</button>` : ''}
         <button class="btn btn-danger" style="margin-left:auto;" onclick="deleteIssue(${i})">🗑</button>`}
       </div>
@@ -1168,6 +1169,35 @@ function bulkAction(action) {
   }
   save();
   toggleBulkMode();
+}
+
+function addPhotoToIssue(i) {
+  var inp = document.createElement('input');
+  inp.type = 'file'; inp.accept = 'image/*'; inp.multiple = true;
+  inp.onchange = function() {
+    var files = inp.files; if (!files || !files.length) return;
+    var iss = S.projects[S.proj].issues[i];
+    if (!iss.extraPhotos) iss.extraPhotos = [];
+    var processed = 0;
+    for (var fi = 0; fi < files.length; fi++) {
+      (function(f) {
+        var r = new FileReader();
+        r.onload = function(ev) {
+          compressImage(ev.target.result, function(dataUrl) {
+            if (!iss.photo) { iss.photo = dataUrl; }
+            else { iss.extraPhotos.push(dataUrl); }
+            processed++;
+            if (processed >= files.length) {
+              save(); renderIssues();
+              toast('📷 ' + files.length + ' photo' + (files.length > 1 ? 's' : '') + ' added');
+            }
+          });
+        };
+        r.readAsDataURL(f);
+      })(files[fi]);
+    }
+  };
+  inp.click();
 }
 
 function deleteIssue(i) {
@@ -1352,7 +1382,8 @@ function startRecording() {
   S.recognition.interimResults = false;
   S.recognition.lang = 'en-GB';
   S.recognition.onresult = e => {
-    const transcript = e.results[0][0].transcript;
+    var transcript = e.results[0][0].transcript;
+    transcript = transcript.charAt(0).toUpperCase() + transcript.slice(1);
     const current = document.getElementById('issueDesc').value;
     const updated = current ? current + ' ' + transcript : transcript;
     document.getElementById('issueDesc').value = updated;
@@ -1369,7 +1400,8 @@ function startRecording() {
         S.recognition.interimResults = false;
         S.recognition.lang = 'en-GB';
         S.recognition.onresult = e => {
-          const transcript = e.results[0][0].transcript;
+          var transcript = e.results[0][0].transcript;
+          transcript = transcript.charAt(0).toUpperCase() + transcript.slice(1);
           const current = document.getElementById('issueDesc').value;
           const updated = current ? current + ' ' + transcript : transcript;
           document.getElementById('issueDesc').value = updated;

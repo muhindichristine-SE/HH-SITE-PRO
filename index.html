@@ -734,9 +734,12 @@ async function _restorePhotosFromIDB() {
           if (countStr) {
             var count = parseInt(countStr, 10) || 0;
             iss.extraPhotos = [];
+            iss.extraAnnotations = {};
             for (var ei = 0; ei < count; ei++) {
               var ep = await _loadPhoto('ext_' + iss.id + '_' + ei);
               if (ep) iss.extraPhotos.push(ep);
+              var ea = await _loadPhoto('extann_' + iss.id + '_' + ei);
+              if (ea) iss.extraAnnotations[ei] = ea;
             }
           }
         }
@@ -787,7 +790,7 @@ async function save() {
   try {
     var stripped = S.projects.map(function(proj) {
       var clone = JSON.parse(JSON.stringify(proj));
-      if (clone.issues) clone.issues.forEach(function(iss) { iss.photo = null; iss.annotations = null; iss.extraPhotos = null; });
+      if (clone.issues) clone.issues.forEach(function(iss) { iss.photo = null; iss.annotations = null; iss.extraPhotos = null; iss.extraAnnotations = null; });
       return clone;
     });
     localStorage.setItem('hh_site_audit_only', JSON.stringify(stripped));
@@ -806,6 +809,9 @@ async function save() {
           if (iss.extraPhotos && iss.extraPhotos.length) {
             for (var ei = 0; ei < iss.extraPhotos.length; ei++) {
               await _savePhoto('ext_' + iss.id + '_' + ei, iss.extraPhotos[ei]);
+              if (iss.extraAnnotations && iss.extraAnnotations[ei]) {
+                await _savePhoto('extann_' + iss.id + '_' + ei, iss.extraAnnotations[ei]);
+              }
             }
             await _savePhoto('extcount_' + iss.id, String(iss.extraPhotos.length));
           }
@@ -1086,23 +1092,38 @@ function openPhotoPreview(i, evt) {
   const iss = S.projects[S.proj] && S.projects[S.proj].issues[i];
   const src = iss && (iss.annotations || iss.photo);
   if (!src) return;
+  S._previewIssueIdx = i;
   document.getElementById('photoPreviewImg').src = src;
   var gallery = document.getElementById('extraPhotosGallery');
   gallery.innerHTML = '';
+  // Build photo list with annotate buttons
+  var allPhotos = [];
+  if (iss.annotations || iss.photo) allPhotos.push({ src: iss.annotations || iss.photo, idx: -1, label: 'Main' });
   if (iss.extraPhotos && iss.extraPhotos.length) {
-    iss.extraPhotos.forEach(function(ph, idx) {
-      var img = document.createElement('img');
-      img.src = ph; img.alt = 'Photo ' + (idx + 2);
-      img.style.cssText = 'width:120px;height:90px;object-fit:cover;border-radius:6px;cursor:pointer;border:2px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.2);';
-      img.onclick = function() { document.getElementById('photoPreviewImg').src = ph; };
-      gallery.appendChild(img);
+    iss.extraPhotos.forEach(function(ph, pidx) {
+      var annSrc = (iss.extraAnnotations && iss.extraAnnotations[pidx]) || ph;
+      allPhotos.push({ src: annSrc, idx: pidx, label: 'Photo ' + (pidx + 2) });
     });
-    // also add the main photo as a thumbnail for switching back
-    var mainThumb = document.createElement('img');
-    mainThumb.src = src; mainThumb.alt = 'Photo 1';
-    mainThumb.style.cssText = 'width:120px;height:90px;object-fit:cover;border-radius:6px;cursor:pointer;border:2px solid var(--hh-purple);box-shadow:0 2px 8px rgba(0,0,0,0.2);';
-    mainThumb.onclick = function() { document.getElementById('photoPreviewImg').src = src; };
-    gallery.insertBefore(mainThumb, gallery.firstChild);
+  }
+  if (allPhotos.length > 1) {
+    allPhotos.forEach(function(item) {
+      var wrap = document.createElement('div');
+      wrap.style.cssText = 'display:inline-flex;flex-direction:column;align-items:center;gap:3px;';
+      var img = document.createElement('img');
+      img.src = item.src; img.alt = item.label;
+      img.style.cssText = 'width:100px;height:75px;object-fit:cover;border-radius:6px;cursor:pointer;border:2px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.2);';
+      img.onclick = function() { document.getElementById('photoPreviewImg').src = item.src; };
+      wrap.appendChild(img);
+      var annBtn = document.createElement('button');
+      annBtn.textContent = '✏ Annotate';
+      annBtn.style.cssText = 'font-size:10px;padding:3px 8px;border:1px solid rgba(255,255,255,0.6);background:rgba(61,44,141,0.85);color:white;border-radius:4px;cursor:pointer;';
+      annBtn.onclick = function() {
+        document.getElementById('photoPreviewModal').classList.remove('open');
+        openAnnotate(i, item.idx);
+      };
+      wrap.appendChild(annBtn);
+      gallery.appendChild(wrap);
+    });
   }
   document.getElementById('photoPreviewModal').classList.add('open');
 }
@@ -1472,21 +1493,32 @@ async function saveIssue() {
 
 // ANNOTATION
 let annCtx;
-function openAnnotate(idx) {
-  S.editingIssue = idx; const iss = S.projects[S.proj].issues[idx]; if (!iss.photo) return;
+function openAnnotate(idx, photoIdx) {
+  S.editingIssue = idx;
+  S.annotatingPhotoIdx = (typeof photoIdx === 'number') ? photoIdx : -1;
+  const iss = S.projects[S.proj].issues[idx];
+  var srcPhoto;
+  if (S.annotatingPhotoIdx === -1) {
+    if (!iss.photo) return;
+    srcPhoto = iss.photo;
+  } else {
+    if (!iss.extraPhotos || !iss.extraPhotos[S.annotatingPhotoIdx]) return;
+    srcPhoto = iss.extraPhotos[S.annotatingPhotoIdx];
+  }
+  var existingAnnotation = (S.annotatingPhotoIdx === -1) ? iss.annotations : (iss.extraAnnotations && iss.extraAnnotations[S.annotatingPhotoIdx]);
   showScreen('screenAnnotate');
   const img = document.getElementById('annotationImg'); const canvas = document.getElementById('annotationCanvas');
   img.onload = () => {
     canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
     const newC = canvas.cloneNode(true); canvas.parentNode.replaceChild(newC, canvas);
     const c = document.getElementById('annotationCanvas'); annCtx = c.getContext('2d'); S.annHistory = [];
-    if (iss.annotations) { const prev = new Image(); prev.onload = () => annCtx.drawImage(prev,0,0,c.width,c.height); prev.src = iss.annotations; }
+    if (existingAnnotation) { const prev = new Image(); prev.onload = () => annCtx.drawImage(prev,0,0,c.width,c.height); prev.src = existingAnnotation; }
     c.addEventListener('mousedown', e => annStart(e)); c.addEventListener('mousemove', e => annMove(e)); c.addEventListener('mouseup', () => annEnd());
     c.addEventListener('touchstart', e => { e.preventDefault(); annStart(e.touches[0]); }, {passive:false});
     c.addEventListener('touchmove', e => { e.preventDefault(); annMove(e.touches[0]); }, {passive:false});
     c.addEventListener('touchend', e => { e.preventDefault(); annEnd(); }, {passive:false});
   };
-  img.src = iss.photo;
+  img.src = srcPhoto;
 }
 function getAnnPos(e) { const c = document.getElementById('annotationCanvas'); const r = c.getBoundingClientRect(); return { x: (e.clientX-r.left)*c.width/r.width, y: (e.clientY-r.top)*c.height/r.height }; }
 function annStart(e) { S.isDrawing = true; const p = getAnnPos(e); S.sx=p.x; S.sy=p.y; S.penPts=[{x:p.x,y:p.y}]; const c = document.getElementById('annotationCanvas'); S.annHistory.push(annCtx.getImageData(0,0,c.width,c.height)); }
@@ -1545,7 +1577,14 @@ function saveAnnotation() {
   const c=document.getElementById('annotationCanvas'); const img=document.getElementById('annotationImg');
   const merged=document.createElement('canvas'); merged.width=img.naturalWidth; merged.height=img.naturalHeight;
   const ctx=merged.getContext('2d'); ctx.drawImage(img,0,0); ctx.drawImage(c,0,0);
-  S.projects[S.proj].issues[S.editingIssue].annotations=merged.toDataURL('image/jpeg',0.85);
+  const dataUrl = merged.toDataURL('image/jpeg',0.85);
+  const iss = S.projects[S.proj].issues[S.editingIssue];
+  if (S.annotatingPhotoIdx === -1) {
+    iss.annotations = dataUrl;
+  } else {
+    if (!iss.extraAnnotations) iss.extraAnnotations = {};
+    iss.extraAnnotations[S.annotatingPhotoIdx] = dataUrl;
+  }
   save(); renderIssues(); showScreen('screenProject'); toast('✅ Annotations saved');
 }
 
@@ -1823,59 +1862,71 @@ async function exportPDF() {
 
   footerOnPage(currentPage);
 
-  // ─── ISSUES: 2 PER PAGE, FULL PAGE FILL ─────────────────
-  // A4 usable: y=22 to y=282 = 260mm total
-  // Logo header: 22mm, footer: 282-290
-  // Divider at midpoint y=152. Slot 1: 22–149, Slot 2: 155–282
-  const SLOT_H = 130;       // each slot height mm
-  const PHOTO_W = 95;       // wider photo
-  const PHOTO_H = 88;       // taller photo — fills slot properly
-  const DESC_X = M + PHOTO_W + 5;
-  const DESC_W = W - DESC_X - M + 5;
-  const META_H = 10;        // meta row height
+  // ─── ISSUES: 2 PER PAGE (single-photo) or 1 PER PAGE (multi-photo) ───
+  const SLOT_H = 130;
+  const PHOTO_W = 95;
+  const PHOTO_H = 88;
+  const DESC_X_OFFSET = PHOTO_W + 5;
+  const DESC_W = W - M - DESC_X_OFFSET - M + 5;
+  const META_H = 10;
 
   doc.addPage();
   currentPage++;
   addLogo(140, 8, 58, 12);
 
+  var slotY = 22;
+  var slotsUsed = 0; // 0 or 1 on current page
+
   for (let i = 0; i < p.issues.length; i++) {
     const iss = p.issues[i];
-    const slotIndex = i % 2;
 
-    // New page every 2 issues (not on first)
-    if (i > 0 && slotIndex === 0) {
-      footerOnPage(currentPage);
-      doc.addPage();
-      currentPage++;
-      addLogo(140, 8, 58, 12);
+    // Collect all photos
+    var allPhotos = [];
+    if (iss.annotations || iss.photo) allPhotos.push(iss.annotations || iss.photo);
+    if (iss.extraPhotos && iss.extraPhotos.length) {
+      iss.extraPhotos.forEach(function(ep, epIdx) {
+        var annSrc = (iss.extraAnnotations && iss.extraAnnotations[epIdx]) || ep;
+        allPhotos.push(annSrc);
+      });
     }
 
-    const slotY = 22 + slotIndex * SLOT_H;
+    var isMultiPhoto = allPhotos.length > 1;
 
-    // Single purple divider between issues — pushed up into the gap, away from title
-    if (slotIndex === 1) {
+    // Decide if we need a new page
+    if (isMultiPhoto) {
+      // Multi-photo always gets a fresh page
+      if (slotsUsed > 0) {
+        footerOnPage(currentPage);
+        doc.addPage(); currentPage++; addLogo(140, 8, 58, 12);
+      }
+      slotY = 22; slotsUsed = 0;
+    } else {
+      // Single-photo: 2 per page
+      if (slotsUsed >= 2) {
+        footerOnPage(currentPage);
+        doc.addPage(); currentPage++; addLogo(140, 8, 58, 12);
+        slotY = 22; slotsUsed = 0;
+      }
+    }
+
+    // Divider between issues on same page
+    if (slotsUsed === 1) {
       doc.setDrawColor(61,44,141); doc.setLineWidth(0.5);
       doc.line(M, slotY - 10, W-M, slotY - 10);
     }
 
     let y = slotY;
 
-    // Title — bold, no underline
+    // Title
     doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.setTextColor(30,30,30);
     doc.text(iss.title || 'UNTITLED ISSUE', M, y); y += 7;
 
     // Assigned To
     doc.setFont('helvetica','italic'); doc.setFontSize(8.5); doc.setTextColor(120,120,120);
-    doc.text(`Assigned To: ${iss.assigned || ''}`, M, y); y += 7;
+    doc.text('Assigned To: ' + (iss.assigned || ''), M, y); y += 7;
 
     const photoY = y;
-
-    // Collect all photos for this issue
-    var allPhotos = [];
-    if (iss.annotations || iss.photo) allPhotos.push(iss.annotations || iss.photo);
-    if (iss.extraPhotos && iss.extraPhotos.length) {
-      iss.extraPhotos.forEach(function(ep) { allPhotos.push(ep); });
-    }
+    const descX = M + DESC_X_OFFSET;
 
     // Helper to place a single image
     function placePhoto(imgData, px, py, pw, ph) {
@@ -1892,54 +1943,68 @@ async function exportPDF() {
       }
     }
 
+    function placePlaceholder(px, py, pw, ph) {
+      doc.setFillColor(235,235,235); doc.roundedRect(px, py, pw, ph, 1.5, 1.5, 'F');
+      doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(160,160,160);
+      doc.text('No photo', px+pw/2, py+ph/2, {align:'center'});
+    }
+
     if (allPhotos.length === 0) {
-      // No photos at all
-      doc.setFillColor(230,230,230); doc.rect(M, photoY, PHOTO_W, PHOTO_H, 'F');
-      doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(150,150,150);
-      doc.text('No photo', M+PHOTO_W/2, photoY+PHOTO_H/2, {align:'center'});
-    } else if (allPhotos.length === 1) {
-      // Single photo, full size
-      if (!placePhoto(allPhotos[0], M, photoY, PHOTO_W, PHOTO_H)) {
-        doc.setFillColor(230,230,230); doc.rect(M, photoY, PHOTO_W, PHOTO_H, 'F');
-        doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(150,150,150);
-        doc.text('No photo', M+PHOTO_W/2, photoY+PHOTO_H/2, {align:'center'});
-      }
+      // No photo placeholder
+      placePlaceholder(M, photoY, PHOTO_W, PHOTO_H);
     } else {
-      // Multiple photos: main photo on top, thumbnails below
-      var mainH = PHOTO_H - 24;
-      if (!placePhoto(allPhotos[0], M, photoY, PHOTO_W, mainH)) {
-        doc.setFillColor(230,230,230); doc.rect(M, photoY, PHOTO_W, mainH, 'F');
-      }
-      // Thumbnail row below main photo
-      var thumbY = photoY + mainH + 2;
-      var thumbCount = Math.min(allPhotos.length - 1, 4); // max 4 thumbnails
-      var thumbW = (PHOTO_W - (thumbCount - 1) * 2) / thumbCount;
-      var thumbH = 20;
-      for (var ti = 0; ti < thumbCount; ti++) {
-        var tx = M + ti * (thumbW + 2);
-        if (!placePhoto(allPhotos[ti + 1], tx, thumbY, thumbW, thumbH)) {
-          doc.setFillColor(220,220,220); doc.rect(tx, thumbY, thumbW, thumbH, 'F');
-        }
-      }
-      if (allPhotos.length > 5) {
-        doc.setFont('helvetica','normal'); doc.setFontSize(7); doc.setTextColor(100,100,100);
-        doc.text('+' + (allPhotos.length - 5) + ' more', M + PHOTO_W, thumbY + thumbH / 2 + 2, {align:'right'});
+      // Main photo (always same position: left column)
+      if (!placePhoto(allPhotos[0], M, photoY, PHOTO_W, PHOTO_H)) {
+        placePlaceholder(M, photoY, PHOTO_W, PHOTO_H);
       }
     }
 
-    // Description right of photo
+    // Description to the right of main photo
     doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(40,40,40);
     const descLines = doc.splitTextToSize(iss.description || '', DESC_W);
-    doc.text(descLines, DESC_X, photoY + 6);
+    doc.text(descLines.slice(0, 14), descX, photoY + 6);
 
     if (iss.aiSummary) {
-      const aiY = photoY + 6 + Math.min(descLines.length, 10) * 4.5 + 3;
+      var usedLines = Math.min(descLines.length, 14);
+      const aiY = photoY + 6 + usedLines * 4.2 + 3;
       doc.setFont('helvetica','italic'); doc.setFontSize(8); doc.setTextColor(61,44,141);
-      doc.text(doc.splitTextToSize('✦ ' + iss.aiSummary, DESC_W), DESC_X, aiY);
+      doc.text(doc.splitTextToSize('AI: ' + iss.aiSummary, DESC_W).slice(0, 4), descX, aiY);
     }
 
-    // Meta row — sits below photo, light purple line above
-    const metaY = photoY + PHOTO_H + 3;
+    // Extra photos stacked below the main photo (multi-photo only)
+    var bottomOfContent = photoY + PHOTO_H;
+    if (allPhotos.length > 1) {
+      var extraY = photoY + PHOTO_H + 5;
+      var extraPhotoH = 70; // generous size for each additional photo
+      for (var epi = 1; epi < allPhotos.length; epi++) {
+        // Check if we need a page break for the next photo
+        if (extraY + extraPhotoH > 275) {
+          // Finish current page and start new one (continuation)
+          footerOnPage(currentPage);
+          doc.addPage(); currentPage++; addLogo(140, 8, 58, 12);
+          extraY = 24;
+          doc.setFont('helvetica','italic'); doc.setFontSize(8); doc.setTextColor(120,120,120);
+          doc.text((iss.title || 'ISSUE') + ' (continued)', M, extraY); extraY += 6;
+        }
+        // Photo label
+        doc.setFont('helvetica','normal'); doc.setFontSize(7.5); doc.setTextColor(120,120,120);
+        doc.text('Photo ' + (epi + 1) + ' of ' + allPhotos.length, M, extraY); extraY += 4;
+        // Place the extra photo at the same width as the main
+        if (!placePhoto(allPhotos[epi], M, extraY, PHOTO_W, extraPhotoH)) {
+          placePlaceholder(M, extraY, PHOTO_W, extraPhotoH);
+        }
+        extraY += extraPhotoH + 5;
+      }
+      bottomOfContent = extraY;
+    }
+
+    // Meta row at bottom of issue
+    var metaY;
+    if (isMultiPhoto) {
+      metaY = bottomOfContent + 2;
+    } else {
+      metaY = photoY + PHOTO_H + 3;
+    }
     doc.setDrawColor(200,195,240); doc.setLineWidth(0.3);
     doc.line(M, metaY, W-M, metaY);
     const sevColor = iss.severity==='Critical'?[192,57,43]:iss.severity==='Moderate'?[212,130,10]:iss.severity==='Observation'?[107,114,128]:[39,174,96];
@@ -1950,6 +2015,15 @@ async function exportPDF() {
     if (iss.gps) {
       doc.setTextColor(130,130,130);
       doc.text(`GPS: ${iss.gps.lat}, ${iss.gps.lng}`, W-M, metaY + 5, {align:'right'});
+    }
+
+    // Track slot usage
+    if (isMultiPhoto) {
+      // Multi-photo took the whole page, force new page for next issue
+      slotsUsed = 2;
+    } else {
+      slotsUsed++;
+      slotY = 22 + slotsUsed * SLOT_H;
     }
   }
 
